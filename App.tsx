@@ -1,52 +1,71 @@
 import { StatusBar } from "expo-status-bar"
-import { Button, FlatList, StyleSheet, Text, TextInput, View } from "react-native"
-import { firestore, collection, addDoc, serverTimestamp, MESSAGES } from "./firebase/Config"
-import { onSnapshot, query, orderBy } from "firebase/firestore"
+import { Button, FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from "react-native"
 import React, { useEffect, useState } from "react"
-
-type Message = {
-  id: string
-  text: string
-  createdAt: number | null
-}
+import { AppState, AppStateStatus } from "react-native"
+import { subscribeToMessages, sendMessage, Message } from "./firebase/MessageRepository"
 
 export default function App(): React.ReactElement {
   const [value, setValue] = useState<string>("")
   const [messages, setMessages] = useState<Message[]>([])
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    const colRef = collection(firestore, MESSAGES)
-    const q = query(colRef, orderBy("createdAt", "asc"))
+    let unsubscribe = startListening()
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const msgs: Message[] = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        text: doc.data().text,
-        createdAt: doc.data().createdAt?.seconds ?? null,
-      }))
-      setMessages(msgs)
-    })
+    // Unsubscribe when app goes to background, resubscribe on foreground
+    // This reduces bandwidth when the user isn't actively using the app
+    const appStateSub = AppState.addEventListener(
+      "change",
+      (state: AppStateStatus) => {
+        if (state === "active") {
+          unsubscribe = startListening()
+        } else {
+          unsubscribe()
+        }
+      },
+    )
 
-    return () => unsubscribe()
+    return () => {
+      unsubscribe()
+      appStateSub.remove()
+    }
   }, [])
 
-  const handleSend = async () => {
-    if (!value.trim()) return
+  function startListening() {
+    return subscribeToMessages(
+      (msgs) => {
+        setMessages(msgs)
+        setError(null)
+      },
+      (err) => {
+        console.error("Firestore snapshot error", err)
+        setError("Failed to load messages. Check your connection.")
+      },
+    )
+  }
 
+  const handleSend = async () => {
     try {
-      const colRef = collection(firestore, MESSAGES)
-      await addDoc(colRef, {
-        text: value,
-        createdAt: serverTimestamp(),
-      })
+      await sendMessage(value)
       setValue("")
+      setError(null)
     } catch (err) {
-      console.error("Failed to save message", err)
+      console.error("Failed to send message", err)
+      setError("Failed to send message. Please try again.")
     }
   }
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+    >
+      {error && (
+        <View style={styles.errorBanner}>
+          <Text style={styles.errorText}>{error}</Text>
+        </View>
+      )}
+
       <FlatList
         data={messages}
         keyExtractor={(item) => item.id}
@@ -56,18 +75,23 @@ export default function App(): React.ReactElement {
           </View>
         )}
         style={styles.list}
+        inverted
       />
+
       <View style={styles.form}>
         <TextInput
           style={styles.input}
           placeholder='Type here...'
           value={value}
           onChangeText={setValue}
+          onSubmitEditing={handleSend}
+          returnKeyType='send'
         />
         <Button title='Send' onPress={handleSend} />
       </View>
+
       <StatusBar style='auto' />
-    </View>
+    </KeyboardAvoidingView>
   )
 }
 
@@ -104,5 +128,16 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 8,
     marginRight: 8,
+  },
+  errorBanner: {
+    width: "100%",
+    backgroundColor: "#ffe0e0",
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 8,
+  },
+  errorText: {
+    color: "#cc0000",
+    fontSize: 13,
   },
 })
