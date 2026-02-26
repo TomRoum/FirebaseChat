@@ -5,41 +5,35 @@ export type Message = {
   id: string
   text: string
   senderId: string
+  displayName: string
   createdAt: number | null
 }
 
 const MESSAGE_LIMIT = 50
 
 export function subscribeToMessages(
-  onMessages: (messages: Message[]) => void,
-  onError: (err: Error) => void
+  onSnapshot_: (snapshot: import("firebase/firestore").QuerySnapshot) => void,
+  onError: (err: Error) => void,
 ): Unsubscribe {
   const colRef = collection(firestore, MESSAGES)
   const q = query(colRef, orderBy("createdAt", "desc"), limit(MESSAGE_LIMIT))
-
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const msgs: Message[] = snapshot.docs.map((doc) => ({
-        id: doc.id,
-        text: doc.data().text,
-        senderId: doc.data().senderId ?? "unknown",
-        createdAt: doc.data().createdAt?.seconds ?? null,
-      }))
-      onMessages(msgs)
-    },
-    onError
-  )
+  return onSnapshot(q, { includeMetadataChanges: true }, onSnapshot_, onError)
 }
 
-export async function sendMessage(text: string, uid: string): Promise<void> {
+export async function sendMessage(
+  text: string,
+  uid: string,
+  displayName: string,
+): Promise<string> {
   const trimmed = text.trim()
-  if (!trimmed) return
+  if (!trimmed) throw new Error("Message text cannot be empty")
 
   const colRef = collection(firestore, MESSAGES)
-  await addDoc(colRef, {
+  const ref = await addDoc(colRef, {
     text: trimmed,
     senderId: uid,
+    displayName,
     createdAt: serverTimestamp(),
   })
+  return ref.id
 }
