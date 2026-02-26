@@ -1,35 +1,57 @@
 import { StatusBar } from "expo-status-bar"
-import { Button, FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from "react-native"
-import React, { useEffect, useState } from "react"
-import { AppState, AppStateStatus } from "react-native"
+import { ActivityIndicator, AppState, AppStateStatus, Button, FlatList, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from "react-native"
+import React, { useEffect, useRef, useState } from "react"
+import { signInAnon, subscribeToAuthState, formatSenderId } from "./firebase/AuthRepository"
 import { subscribeToMessages, sendMessage, Message } from "./firebase/MessageRepository"
 
+type AuthState = "loading" | "ready" | "error"
+
 export default function App(): React.ReactElement {
+  const [authState, setAuthState] = useState<AuthState>("loading")
+  const [uid, setUid] = useState<string | null>(null)
   const [value, setValue] = useState<string>("")
   const [messages, setMessages] = useState<Message[]>([])
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    let unsubscribe = startListening()
+  // Keep a stable ref to the unsubscribe fn so AppState handler can call it
+  const unsubscribeMessages = useRef<(() => void) | null>(null)
 
-    // Unsubscribe when app goes to background, resubscribe on foreground
-    // This reduces bandwidth when the user isn't actively using the app
-    const appStateSub = AppState.addEventListener(
-      "change",
-      (state: AppStateStatus) => {
-        if (state === "active") {
-          unsubscribe = startListening()
-        } else {
-          unsubscribe()
-        }
-      },
-    )
+  useEffect(() => {
+    const unsubscribeAuth = subscribeToAuthState((user) => {
+      if (user) {
+        setUid(user.uid)
+        setAuthState("ready")
+      } else {
+        // Trigger anonymous sign-in
+        signInAnon().catch((err) => {
+          console.error("Anonymous sign-in failed", err)
+          setAuthState("error")
+          setError("Could not connect. Is Anonymous auth enabled in Firebase console?")
+        })
+      }
+    })
+
+    return () => unsubscribeAuth()
+  }, [])
+
+  useEffect(() => {
+    if (authState !== "ready") return
+
+    unsubscribeMessages.current = startListening()
+
+    const appStateSub = AppState.addEventListener("change", (state: AppStateStatus) => {
+      if (state === "active") {
+        unsubscribeMessages.current = startListening()
+      } else {
+        unsubscribeMessages.current?.()
+      }
+    })
 
     return () => {
-      unsubscribe()
+      unsubscribeMessages.current?.()
       appStateSub.remove()
     }
-  }, [])
+  }, [authState])
 
   function startListening() {
     return subscribeToMessages(
@@ -40,19 +62,30 @@ export default function App(): React.ReactElement {
       (err) => {
         console.error("Firestore snapshot error", err)
         setError("Failed to load messages. Check your connection.")
-      },
+      }
     )
   }
 
   const handleSend = async () => {
+    if (!uid || !value.trim()) return
     try {
-      await sendMessage(value)
+      await sendMessage(value, uid)
       setValue("")
       setError(null)
     } catch (err) {
       console.error("Failed to send message", err)
       setError("Failed to send message. Please try again.")
     }
+  }
+
+  // Loading screen while auth is resolving
+  if (authState === "loading") {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator size="large" />
+        <Text style={styles.loadingText}>Connecting...</Text>
+      </View>
+    )
   }
 
   return (
@@ -69,11 +102,16 @@ export default function App(): React.ReactElement {
       <FlatList
         data={messages}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <View style={styles.bubble}>
-            <Text>{item.text}</Text>
-          </View>
-        )}
+        renderItem={({ item }) => {
+          const isMe = item.senderId === uid
+          const label = isMe ? "You" : formatSenderId(item.senderId)
+          return (
+            <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}>
+              <Text style={styles.senderLabel}>{label}</Text>
+              <Text>{item.text}</Text>
+            </View>
+          )
+        }}
         style={styles.list}
         inverted
       />
@@ -81,21 +119,30 @@ export default function App(): React.ReactElement {
       <View style={styles.form}>
         <TextInput
           style={styles.input}
-          placeholder='Type here...'
+          placeholder="Type here..."
           value={value}
           onChangeText={setValue}
           onSubmitEditing={handleSend}
-          returnKeyType='send'
+          returnKeyType="send"
         />
-        <Button title='Send' onPress={handleSend} />
+        <Button title="Send" onPress={handleSend} disabled={!value.trim()} />
       </View>
 
-      <StatusBar style='auto' />
+      <StatusBar style="auto" />
     </KeyboardAvoidingView>
   )
 }
 
 const styles = StyleSheet.create({
+  centered: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  loadingText: {
+    marginTop: 12,
+    color: "#888",
+  },
   container: {
     flex: 1,
     backgroundColor: "#fff",
@@ -109,11 +156,24 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   bubble: {
-    backgroundColor: "#f0f0f0",
     borderRadius: 8,
     padding: 8,
     marginVertical: 4,
+    maxWidth: "75%",
+  },
+  bubbleMe: {
+    backgroundColor: "#dcf8c6",
+    alignSelf: "flex-end",
+  },
+  bubbleThem: {
+    backgroundColor: "#f0f0f0",
     alignSelf: "flex-start",
+  },
+  senderLabel: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#555",
+    marginBottom: 2,
   },
   form: {
     flexDirection: "row",

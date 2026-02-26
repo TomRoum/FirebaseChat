@@ -1,5 +1,8 @@
 import { initializeApp } from "firebase/app"
 import { getFirestore, Firestore, collection, addDoc, serverTimestamp } from "firebase/firestore"
+// @ts-ignore: getReactNativePersistence exists in the RN bundle but is missing from TS definitions
+import { initializeAuth, getReactNativePersistence, Auth } from "firebase/auth"
+import AsyncStorage from "@react-native-async-storage/async-storage"
 
 const firebaseConfig = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
@@ -12,10 +15,15 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig)
 const firestore: Firestore = getFirestore(app)
+// @ts-ignore: AsyncStorage satisfies the persistence interface at runtime
+const auth: Auth = initializeAuth(app, {
+  persistence: getReactNativePersistence(AsyncStorage),
+})
 const MESSAGES: string = "messages"
 
 export {
   firestore,
+  auth,
   collection,
   addDoc,
   serverTimestamp,

@@ -4,6 +4,7 @@ import { onSnapshot, query, orderBy, limit, Unsubscribe } from "firebase/firesto
 export type Message = {
   id: string
   text: string
+  senderId: string
   createdAt: number | null
 }
 
@@ -22,6 +23,7 @@ export function subscribeToMessages(
       const msgs: Message[] = snapshot.docs.map((doc) => ({
         id: doc.id,
         text: doc.data().text,
+        senderId: doc.data().senderId ?? "unknown",
         createdAt: doc.data().createdAt?.seconds ?? null,
       }))
       onMessages(msgs)
@@ -30,15 +32,14 @@ export function subscribeToMessages(
   )
 }
 
-// Sends a new message to Firestore
-// Throws on failure. Caller is responsible for handling the error
-export async function sendMessage(text: string): Promise<void> {
+export async function sendMessage(text: string, uid: string): Promise<void> {
   const trimmed = text.trim()
   if (!trimmed) return
 
   const colRef = collection(firestore, MESSAGES)
   await addDoc(colRef, {
     text: trimmed,
+    senderId: uid,
     createdAt: serverTimestamp(),
   })
 }
